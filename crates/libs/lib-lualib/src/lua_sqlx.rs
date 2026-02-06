@@ -23,7 +23,8 @@ use lib_lua::{
 };
 
 use crate::lua_json::{JsonOptions, encode_table};
-use crate::{LOG_LEVEL_ERROR, LOG_LEVEL_INFO, moon_log, moon_send};
+use crate::{LOG_LEVEL_ERROR, LOG_LEVEL_INFO, moon_log};
+use crate::lib_ltask::ltask_send;
 
 lazy_static! {
     static ref DATABASE_CONNECTIONSS: DashMap<String, DatabaseConnection> = DashMap::new();
@@ -210,7 +211,7 @@ async fn handle_result(
 ) -> bool {
     match res {
         Ok(rows) => {
-            moon_send(protocol_type, owner, session, rows);
+            ltask_send(protocol_type, owner, session, rows);
             if *failed_times > 0 {
                 moon_log(
                     owner,
@@ -226,7 +227,7 @@ async fn handle_result(
         }
         Err(err) => {
             if session != 0 {
-                moon_send(protocol_type, owner, session, DatabaseResponse::Error(err));
+                ltask_send(protocol_type, owner, session, DatabaseResponse::Error(err));
                 counter.fetch_sub(1, std::sync::atomic::Ordering::Release);
                 false
             } else {
@@ -297,27 +298,29 @@ extern "C-unwind" fn connect(state: LuaState) -> i32 {
     let owner = laux::lua_get(state, 2);
     let session: i64 = laux::lua_get(state, 3);
 
-    let database_url: &str = laux::lua_get(state, 4);
-    let name: &str = laux::lua_get(state, 5);
+    let database_url: String = laux::lua_get::<&str>(state, 4).to_string();
+    let name: String = laux::lua_get::<&str>(state, 5).to_string();
     let connect_timeout: u64 = laux::lua_opt(state, 6).unwrap_or(5000);
 
-    CONTEXT.tokio_runtime.spawn(async move {
-        match DatabasePool::connect(database_url, Duration::from_millis(connect_timeout)).await {
+    // Async path: spawn runs on Tokio workers. service_push_message is now protected by a spinlock
+    // so multiple producers (ltask thread + Tokio thread) can push to the same service queue safely.
+    let _handle = CONTEXT.tokio_runtime.spawn(async move {
+        match DatabasePool::connect(database_url.as_str(), Duration::from_millis(connect_timeout)).await {
             Ok(pool) => {
                 let (tx, rx) = mpsc::channel(100);
                 let counter = Arc::new(AtomicI64::new(0));
                 DATABASE_CONNECTIONSS.insert(
-                    name.to_string(),
+                    name.clone(),
                     DatabaseConnection {
                         tx: tx.clone(),
                         counter: counter.clone(),
                     },
                 );
-                moon_send(protocol_type, owner, session, DatabaseResponse::Connect);
-                database_handler(protocol_type, &pool, rx, database_url, counter).await;
+                ltask_send(protocol_type, owner, session, DatabaseResponse::Connect);
+                database_handler(protocol_type, &pool, rx, database_url.as_str(), counter).await;
             }
             Err(err) => {
-                moon_send(
+                ltask_send(
                     protocol_type,
                     owner,
                     session,

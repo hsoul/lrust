@@ -14,6 +14,7 @@ pub mod lua_mongodb;
 #[cfg(feature = "websocket")]
 pub mod lua_websocket;
 pub mod lua_crypto;
+pub mod lib_ltask;
 
 pub fn moon_send<T>(protocol_type: u8, owner: u32, session: i64, res: T) {
     unsafe extern "C-unwind" {
