@@ -83,10 +83,16 @@ pub fn ltask_push_log(sender_id: u32, data: &[u8]) {
 }
 
 /// Push log from extension: encodes (level, message) in Lua seri format and sends via ltask_push_log.
-/// Root/logger will unpack with ltask.unpack_remove and get level + message. No C/Lua changes needed.
+/// Root/logger will unpack with ltask.unpack_remove and get level + message.
+/// Buffer format must match lua-seri: [4-byte length (LE)][seri data]; C seri_unpack reads length first.
 pub fn ltask_log(sender_id: u32, level: &str, message: &str) {
     let payload = seri_pack_log(level, message);
-    if !payload.is_empty() {
-        ltask_push_log(sender_id, &payload);
+    if payload.is_empty() {
+        return;
     }
+    let len = payload.len() as u32;
+    let mut buf = Vec::with_capacity(4 + payload.len());
+    buf.extend_from_slice(&len.to_le_bytes());
+    buf.extend_from_slice(&payload);
+    ltask_push_log(sender_id, &buf);
 }

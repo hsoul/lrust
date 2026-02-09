@@ -24,7 +24,7 @@ use lib_lua::{
 
 use crate::lua_json::{JsonOptions, encode_table};
 use crate::{LOG_LEVEL_ERROR, LOG_LEVEL_INFO, moon_log};
-use crate::lib_ltask::ltask_send;
+use crate::lib_ltask::{ltask_log, ltask_send};
 
 lazy_static! {
     static ref DATABASE_CONNECTIONSS: DashMap<String, DatabaseConnection> = DashMap::new();
@@ -304,6 +304,7 @@ extern "C-unwind" fn connect(state: LuaState) -> i32 {
 
     // Async path: spawn runs on Tokio workers. service_push_message is now protected by a spinlock
     // so multiple producers (ltask thread + Tokio thread) can push to the same service queue safely.
+    // ltask_log(owner, "info", &format!("sqlx begin connect {} {}", name, database_url));
     let _handle = CONTEXT.tokio_runtime.spawn(async move {
         match DatabasePool::connect(database_url.as_str(), Duration::from_millis(connect_timeout)).await {
             Ok(pool) => {
@@ -316,6 +317,7 @@ extern "C-unwind" fn connect(state: LuaState) -> i32 {
                         counter: counter.clone(),
                     },
                 );
+                // ltask_log(owner, "info", &format!("sqlx connect {} success", name));
                 ltask_send(protocol_type, owner, session, DatabaseResponse::Connect);
                 database_handler(protocol_type, &pool, rx, database_url.as_str(), counter).await;
             }
